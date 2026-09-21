@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { cleanSupabaseUrl } from '../lib/tailortrack.js';
 
 /**
  * GET /api/health - a setup check.
@@ -12,13 +13,16 @@ import { createClient } from '@supabase/supabase-js';
  * from the public part of the token, so the secret is not exposed.
  */
 export default async function handler(request, response) {
-  const url = process.env.SUPABASE_URL || '';
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+  const raw = process.env.SUPABASE_URL || '';
+  const url = cleanSupabaseUrl(raw);
+  const key = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
 
   const report = {
     SUPABASE_URL: {
       present: url.length > 0,
-      value: url ? maskUrl(url) : null,
+      asYouEnteredIt: raw ? maskUrl(raw) : null,
+      afterCleaning: url ? maskUrl(url) : null,
+      wasCleanedUp: raw !== url,
       looksRight: /^https:\/\/[a-z0-9-]+\.supabase\.co$/.test(url),
       problem: urlProblem(url),
     },
