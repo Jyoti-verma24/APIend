@@ -1,0 +1,10 @@
+{
+  "name": "tailortrack",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Order tracking for a tailoring shop - static page plus Vercel API endpoints on Supabase",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4"
+  }
+}

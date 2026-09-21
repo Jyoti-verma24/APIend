@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TailorTrack</title>
+<style>
+  :root {
+    --ink: #1c2126;
+    --muted: #667085;
+    --line: #e3e6ea;
+    --bg: #f6f7f9;
+    --card: #ffffff;
+    --accent: #1f6feb;
+    --good: #1a7f4b;
+    --warn: #b54708;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px 16px 64px;
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: var(--ink); background: var(--bg);
+  }
+  .wrap { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  h2 { font-size: 17px; margin: 0 0 14px; }
+  .sub { color: var(--muted); margin: 0 0 24px; font-size: 14px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 10px; padding: 20px; margin-bottom: 18px;
+  }
+  label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 5px; }
+  input, textarea {
+    width: 100%; padding: 9px 11px; font: inherit; font-size: 15px;
+    border: 1px solid var(--line); border-radius: 7px; background: #fff; color: var(--ink);
+  }
+  input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+  .field { margin-bottom: 14px; }
+  button {
+    font: inherit; font-weight: 600; font-size: 15px; cursor: pointer;
+    padding: 10px 18px; border-radius: 7px; border: 1px solid var(--accent);
+    background: var(--accent); color: #fff;
+  }
+  button:hover { filter: brightness(1.08); }
+  button:disabled { opacity: .55; cursor: default; }
+  button.plain { background: #fff; color: var(--ink); border-color: var(--line); }
+  button.small { padding: 6px 12px; font-size: 13px; }
+  a { text-decoration: none; }
+  .note { padding: 11px 14px; border-radius: 7px; font-size: 14px; margin-bottom: 16px; }
+  .note.ok { background: #e7f6ed; color: var(--good); }
+  .note.bad { background: #fdeceb; color: #b42318; }
+  .order { border-top: 1px solid var(--line); padding: 16px 0; }
+  .order:first-of-type { border-top: 0; padding-top: 0; }
+  .order-top { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .who { font-weight: 600; }
+  .meta { color: var(--muted); font-size: 14px; }
+  .badge {
+    display: inline-block; padding: 3px 10px; border-radius: 99px;
+    font-size: 12px; font-weight: 700; letter-spacing: .04em;
+    background: #eef2f6; color: #344054;
+  }
+  .badge.done { background: #e7f6ed; color: var(--good); }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .amount { font-variant-numeric: tabular-nums; }
+  .track-status { font-size: 20px; font-weight: 700; margin: 0 0 6px; }
+  .step {
+    display: flex; gap: 14px; align-items: flex-start;
+    padding: 12px 0; border-top: 1px solid var(--line);
+  }
+  .step:first-child { border-top: 0; }
+  .step .dot { font-size: 20px; width: 28px; text-align: center; }
+  .step .txt { font-weight: 600; }
+  .step.upcoming { opacity: .45; }
+  .step.current .txt { color: var(--accent); }
+  .pay { display: flex; justify-content: space-between; padding: 7px 0; font-size: 15px; }
+  .pay.total {
+    border-top: 1px solid var(--line); margin-top: 6px; padding-top: 12px; font-weight: 700;
+  }
+  .late { color: var(--warn); font-weight: 600; }
+  @media (max-width: 560px) { .row { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap" id="app">Loading...</div>
+
+<script>
+// Which view to show is decided by the URL: a ?token= means a customer opened
+// their tracking link, anything else is the tailor's own dashboard.
+const token = new URLSearchParams(location.search).get('token');
+const app = document.getElementById('app');
+
+const ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
+
+/** Escapes text before it goes into HTML, so a name containing < cannot break the page. */
+function esc(value) {
+  return String(value == null ? '' : value).replace(/[&<>"]/g, (ch) => ESCAPES[ch]);
+}
+
+/** Indian-style digit grouping, so 120000 reads as 1,20,000. */
+function rupees(amount) {
+  return '₹' + Number(amount || 0).toLocaleString('en-IN');
+}
+
+/** The passcode is kept for this browser tab only. */
+function passcode() {
+  return sessionStorage.getItem('passcode') || '';
+}
+
+/** Calls one of the API endpoints and returns its JSON, throwing on an error reply. */
+async function api(path, options) {
+  const settings = options || {};
+  const response = await fetch(path, {
+    method: settings.method || 'GET',
+    body: settings.body,
+    headers: { 'Content-Type': 'application/json', 'x-tailor-passcode': passcode() }
+  });
+  const body = await response.json();
+  if (!response.ok) {
+    throw new Error(body.details ? body.details.join('. ') : (body.error || 'Request failed'));
+  }
+  return body;
+}
+
+function flash(message, kind) {
+  document.getElementById('flash').innerHTML =
+    '<div class="note ' + kind + '">' + esc(message) + '</div>';
+}
+
+/* ---------------------------- Tailor dashboard ---------------------------- */
+
+function dashboard() {
+  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+
+  app.innerHTML =
+    '<h1>TailorTrack</h1>' +
+    '<p class="sub">Take in a garment, move it along, and send the customer a link to follow it.</p>' +
+    '<div id="flash"></div>' +
+
+    '<div class="card"><h2>New order</h2><form id="new-order">' +
+      '<div class="row">' +
+        '<div><label for="customerName">Customer name</label>' +
+          '<input id="customerName" required placeholder="Amit Kumar"></div>' +
+        '<div><label for="customerPhone">Phone (with country code)</label>' +
+          '<input id="customerPhone" required placeholder="+919876543210"></div>' +
+      '</div>' +
+      '<div class="row">' +
+        '<div><label for="garmentType">Garment</label>' +
+          '<input id="garmentType" required placeholder="Kurta"></div>' +
+        '<div><label for="deliveryDate">Delivery date</label>' +
+          '<input id="deliveryDate" type="date" required min="' + tomorrow +
+          '" value="' + tomorrow + '"></div>' +
+      '</div>' +
+      '<div class="row">' +
+        '<div><label for="totalAmount">Total amount</label>' +
+          '<input id="totalAmount" type="number" min="1" step="1" required placeholder="1500"></div>' +
+        '<div><label for="advancePayment">Advance taken (optional)</label>' +
+          '<input id="advancePayment" type="number" min="0" step="1" placeholder="500"></div>' +
+      '</div>' +
+      '<div class="field"><label for="description">Notes (optional)</label>' +
+        '<textarea id="description" rows="2" placeholder="Navy blue, slim fit"></textarea></div>' +
+      '<button type="submit">Create order</button>' +
+    '</form></div>' +
+
+    '<div class="card"><h2>Orders</h2><div id="orders">Loading...</div></div>' +
+
+    '<div class="card"><h2>Tailor passcode</h2>' +
+      '<p class="sub" style="margin-bottom:12px">Only needed if TAILOR_PASSCODE is set in ' +
+      'Vercel. Kept in this tab only.</p>' +
+      '<div class="row" style="margin-bottom:0">' +
+        '<input id="passcode" type="password" placeholder="Passcode" value="' +
+          esc(passcode()) + '">' +
+        '<button class="plain" id="save-pass" type="button">Save</button>' +
+      '</div></div>';
+
+  document.getElementById('save-pass').onclick = function () {
+    sessionStorage.setItem('passcode', document.getElementById('passcode').value);
+    flash('Passcode saved for this tab.', 'ok');
+    loadOrders();
+  };
+  document.getElementById('new-order').onsubmit = createOrder;
+  loadOrders();
+}
+
+async function createOrder(event) {
+  event.preventDefault();
+  const form = event.target;
+  const button = form.querySelector('button');
+  const value = (id) => document.getElementById(id).value;
+  button.disabled = true;
+
+  try {
+    const result = await api('/api/orders', {
+      method: 'POST',
+      body: JSON.stringify({
+        customerName: value('customerName'),
+        customerPhone: value('customerPhone'),
+        garmentType: value('garmentType'),
+        description: value('description'),
+        totalAmount: Number(value('totalAmount')),
+        deliveryDate: value('deliveryDate'),
+        advancePayment: Number(value('advancePayment') || 0)
+      })
+    });
+    flash('Order created for ' + result.order.customerName + '. Balance due ' +
+      rupees(result.order.balanceDue) + '.', 'ok');
+    form.reset();
+    loadOrders();
+  } catch (error) {
+    flash(error.message, 'bad');
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function loadOrders() {
+  const box = document.getElementById('orders');
+  try {
+    const result = await api('/api/orders');
+    if (result.orders.length === 0) {
+      box.innerHTML = '<p class="meta">No orders yet. Create the first one above.</p>';
+      return;
+    }
+    box.innerHTML = result.orders.map(orderRow).join('');
+
+    box.querySelectorAll('[data-advance]').forEach(function (button) {
+      button.onclick = () => advance(button.dataset.advance, button.dataset.next);
+    });
+    box.querySelectorAll('[data-copy]').forEach(function (button) {
+      button.onclick = async function () {
+        await navigator.clipboard.writeText(button.dataset.copy);
+        flash('Tracking link copied.', 'ok');
+      };
+    });
+  } catch (error) {
+    box.innerHTML = '<div class="note bad">' + esc(error.message) + '</div>';
+  }
+}
+
+/** One order in the list, with its next-stage button and sharing links. */
+function orderRow(order) {
+  const link = location.origin + '/?token=' + order.publicToken;
+  const message = 'Hi ' + order.customerName + '! Your ' + order.garmentType +
+    ' order is with us. Track it here: ' + link;
+  const whatsapp = 'https://wa.me/' + order.customerPhone.replace(/\D/g, '') +
+    '?text=' + encodeURIComponent(message);
+
+  const advanceButton = order.nextStatus
+    ? '<button class="small" data-advance="' + order.id + '" data-next="' +
+      order.nextStatus + '">Move to ' + order.nextStatus + '</button>'
+    : '';
+
+  return '<div class="order"><div class="order-top"><div>' +
+      '<div class="who">' + esc(order.customerName) + ' &mdash; ' +
+        esc(order.garmentType) + '</div>' +
+      '<div class="meta">Due ' + esc(order.deliveryDate) + ' &middot; ' +
+        '<span class="amount">' + rupees(order.totalAmount) + '</span> total &middot; ' +
+        '<span class="amount">' + rupees(order.balanceDue) + '</span> due</div>' +
+    '</div>' +
+    '<span class="badge ' + (order.status === 'DELIVERED' ? 'done' : '') + '">' +
+      esc(order.status) + '</span>' +
+    '</div><div class="actions">' + advanceButton +
+      '<button class="plain small" data-copy="' + esc(link) + '">Copy link</button>' +
+      '<a href="' + esc(whatsapp) + '" target="_blank" rel="noopener">' +
+        '<button class="plain small" type="button">Send on WhatsApp</button></a>' +
+    '</div></div>';
+}
+
+async function advance(orderId, nextStatus) {
+  try {
+    const result = await api('/api/order-status?id=' + orderId, {
+      method: 'PUT',
+      body: JSON.stringify({ status: nextStatus })
+    });
+    flash(result.order.garmentType + ' for ' + result.order.customerName + ': ' +
+      result.order.previousStatus + ' → ' + result.order.currentStatus + '.', 'ok');
+    loadOrders();
+  } catch (error) {
+    flash(error.message, 'bad');
+  }
+}
+
+/* -------------------------- Customer tracking ---------------------------- */
+
+async function tracking() {
+  try {
+    const result = await api('/api/track?token=' + encodeURIComponent(token));
+    const order = result.order;
+
+    let due;
+    if (order.isOverdue) {
+      due = '<span class="late">Was due ' + esc(order.deliveryDate) + ' &mdash; ' +
+        Math.abs(order.daysRemaining) + ' day(s) late</span>';
+    } else if (order.status === 'DELIVERED') {
+      due = 'Delivered. Thank you!';
+    } else {
+      due = 'Expected ' + esc(order.deliveryDate) + ' &mdash; ' +
+        order.daysRemaining + ' day(s) to go';
+    }
+
+    const steps = order.timeline.map(function (step) {
+      const words = step.status === 'current' ? 'In progress now'
+        : step.status === 'completed' ? 'Done' : 'Not started';
+      return '<div class="step ' + step.status + '">' +
+        '<div class="dot">' + step.icon + '</div>' +
+        '<div><div class="txt">' + esc(step.label) + '</div>' +
+        '<div class="meta">' + words + '</div></div></div>';
+    }).join('');
+
+    app.innerHTML =
+      '<h1>' + esc(order.shop.name) + '</h1>' +
+      '<p class="sub">Order tracking for ' + esc(order.customerName) + '</p>' +
+
+      '<div class="card">' +
+        '<p class="track-status">' + esc(order.garmentType) + '</p>' +
+        '<p class="meta" style="margin:0 0 10px">' + esc(order.description) + '</p>' +
+        '<p class="meta" style="margin:0">Step ' + order.statusStep + ' of ' +
+          order.totalSteps + ' &middot; ' + due + '</p>' +
+      '</div>' +
+
+      '<div class="card"><h2>Progress</h2>' + steps + '</div>' +
+
+      '<div class="card"><h2>Payment</h2>' +
+        '<div class="pay"><span>Total</span><span class="amount">' +
+          rupees(order.payment.totalAmount) + '</span></div>' +
+        '<div class="pay"><span>Paid</span><span class="amount">' +
+          rupees(order.payment.totalPaid) + '</span></div>' +
+        '<div class="pay total"><span>Balance due</span><span class="amount">' +
+          rupees(order.payment.balanceDue) + '</span></div>' +
+      '</div>' +
+
+      '<div class="card"><h2>The shop</h2><p class="meta" style="margin:0">' +
+        esc(order.shop.address) + '<br>' + esc(order.shop.phone) + '</p></div>';
+  } catch (error) {
+    app.innerHTML = '<h1>TailorTrack</h1><div class="note bad">' +
+      esc(error.message) + '</div>';
+  }
+}
+
+if (token) {
+  tracking();
+} else {
+  dashboard();
+}
+</script>
+</body>
+</html>
